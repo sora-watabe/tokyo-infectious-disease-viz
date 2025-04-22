@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>東京都感染症データビジュアライゼーション</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 20px 0;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        h1 {
+            margin: 0;
+            font-size: 2em;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+        }
+        @media (min-width: 768px) {
+            .dashboard {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+        .card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .card h2 {
+            margin-top: 0;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+            color: #2c3e50;
+        }
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        .filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .filter-group {
+            flex: 1;
+            min-width: 200px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        select, input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .metrics {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .metric {
+            flex: 1;
+            min-width: 150px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        .metric-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #2c3e50;
+            margin: 10px 0;
+        }
+        .metric-label {
+            font-size: 0.9em;
+            color: #6c757d;
+        }
+        .loading {
+            text-align: center;
+            padding: 50px;
+            font-size: 1.2em;
+            color: #6c757d;
+        }
+        footer {
+            text-align: center;
+            margin-top: 30px;
+            padding: 20px;
+            color: #6c757d;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>東京都感染症データビジュアライゼーション</h1>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="card">
+            <h2>フィルター設定</h2>
+            <div class="filters">
+                <div class="filter-group">
+                    <label for="infection-select">感染症:</label>
+                    <select id="infection-select" multiple size="5"></select>
+                </div>
+                <div class="filter-group">
+                    <label for="date-range">期間:</label>
+                    <div style="display: flex; gap: 10px;">
+                        <input type="date" id="start-date">
+                        <input type="date" id="end-date">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="metrics">
+            <div class="metric">
+                <div class="metric-label">最新週 合計感染者数</div>
+                <div class="metric-value" id="latest-total">-</div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">期間内 週別最大合計感染者数</div>
+                <div class="metric-value" id="max-weekly-total">-</div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">期間内 累計感染者数</div>
+                <div class="metric-value" id="total-sum">-</div>
+            </div>
+        </div>
+
+        <div class="dashboard">
+            <div class="card full-width">
+                <h2>感染症の推移</h2>
+                <div id="time-series-chart" style="height: 500px;"></div>
+            </div>
+            
+            <div class="card">
+                <h2>年別 累計感染者数</h2>
+                <div id="yearly-chart" style="height: 400px;"></div>
+            </div>
+            
+            <div class="card">
+                <h2>感染症別 累計感染者数</h2>
+                <div id="infection-chart" style="height: 400px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>データソース: 東京都感染症データ (2015年第1週 - 2025年第15週)</p>
+        </div>
+    </footer>
+
+    <script>
+        // データの読み込み
+        let data;
+        let selectedInfections = [];
+        let startDate, endDate;
+        let filteredData;
+
+        // 日付をフォーマットする関数
+        function formatDate(dateStr) {
+            const date = new Date(dateStr);
+            return `${date.getFullYear()}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
+        }
+
+        // 数値をフォーマットする関数
+        function formatNumber(num) {
+            return num.toLocaleString();
+        }
+
+        // データをフィルタリングする関数
+        function filterData() {
+            if (!data) return;
+
+            // 選択された感染症がない場合は最初の感染症を選択
+            if (selectedInfections.length === 0 && data.infectionNames.length > 0) {
+                selectedInfections = [data.infectionNames[0]];
+                const selectElement = document.getElementById('infection-select');
+                selectElement.value = selectedInfections[0];
+            }
+
+            // 日付範囲のフィルタリング
+            const allDates = data.timeSeriesData.dates;
+            let startIndex = 0;
+            let endIndex = allDates.length - 1;
+
+            if (startDate) {
+                startIndex = allDates.findIndex(d => new Date(d) >= startDate);
+                if (startIndex === -1) startIndex = 0;
+            }
+
+            if (endDate) {
+                const tempIndex = allDates.findIndex(d => new Date(d) > endDate);
+                endIndex = tempIndex === -1 ? allDates.length - 1 : tempIndex - 1;
+            }
+
+            // フィルタリングされたデータを作成
+            filteredData = {
+                dates: allDates.slice(startIndex, endIndex + 1),
+                infections: {}
+            };
+
+            // 選択された感染症のデータをフィルタリング
+            selectedInfections.forEach(infection => {
+                filteredData.infections[infection] = data.timeSeriesData.infections[infection].slice(startIndex, endIndex + 1);
+            });
+
+            updateCharts();
+            updateMetrics();
+        }
+
+        // メトリクスを更新する関数
+        function updateMetrics() {
+            if (!filteredData || !filteredData.dates || filteredData.dates.length === 0) {
+                document.getElementById('latest-total').textContent = '-';
+                document.getElementById('max-weekly-total').textContent = '-';
+                document.getElementById('total-sum').textContent = '-';
+                return;
+            }
+
+            // 最新週の合計感染者数
+            let latestTotal = 0;
+            selectedInfections.forEach(infection => {
+                latestTotal += filteredData.infections[infection][filteredData.infections[infection].length - 1];
+            });
+            document.getElementById('latest-total').textContent = formatNumber(latestTotal);
+
+            // 期間内 週別最大合計感染者数
+            let maxWeeklyTotal = 0;
+            for (let i = 0; i < filteredData.dates.length; i++) {
+                let weeklySum = 0;
+                selectedInfections.forEach(infection => {
+                    weeklySum += filteredData.infections[infection][i];
+                });
+                maxWeeklyTotal = Math.max(maxWeeklyTotal, weeklySum);
+            }
+            document.getElementById('max-weekly-total').textContent = formatNumber(maxWeeklyTotal);
+
+            // 期間内 累計感染者数
+            let totalSum = 0;
+            selectedInfections.forEach(infection => {
+                totalSum += filteredData.infections[infection].reduce((sum, val) => sum + val, 0);
+            });
+            document.getElementById('total-sum').textContent = formatNumber(totalSum);
+        }
+
+        // グラフを更新する関数
+        function updateCharts() {
+            if (!filteredData || !filteredData.dates || filteredData.dates.length === 0) return;
+
+            // 時系列グラフの更新
+            const timeSeriesTraces = selectedInfections.map(infection => {
+                return {
+                    x: filteredData.dates,
+                    y: filteredData.infections[infection],
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: infection
+                };
+            });
+
+            const timeSeriesLayout = {
+                title: '選択された感染症の週別感染者数推移',
+                xaxis: { title: '日付' },
+                yaxis: { title: '感染者数' },
+                autosize: true,
+                margin: { l: 50, r: 50, b: 100, t: 50, pad: 4 }
+            };
+
+            Plotly.newPlot('time-series-chart', timeSeriesTraces, timeSeriesLayout);
+
+            // 年別グラフの更新
+            const years = Object.keys(data.yearlyData).filter(year => {
+                const yearStart = new Date(`${year}-01-01`);
+                const yearEnd = new Date(`${year}-12-31`);
+                return (!startDate || yearEnd >= startDate) && (!endDate || yearStart <= endDate);
+            }).sort();
+
+            const yearlyTraces = selectedInfections.map(infection => {
+                return {
+                    x: years,
+                    y: years.map(year => data.yearlyData[year][infection]),
+                    type: 'bar',
+                    name: infection
+                };
+            });
+
+            const yearlyLayout = {
+                title: '年別 累計感染者数',
+                xaxis: { title: '年' },
+                yaxis: { title: '感染者数' },
+                barmode: 'group',
+                autosize: true,
+                margin: { l: 50, r: 50, b: 50, t: 50, pad: 4 }
+            };
+
+            Plotly.newPlot('yearly-chart', yearlyTraces, yearlyLayout);
+
+            // 感染症別グラフの更新
+            const infectionTotals = {};
+            selectedInfections.forEach(infection => {
+                infectionTotals[infection] = filteredData.infections[infection].reduce((sum, val) => sum + val, 0);
+            });
+
+            const infectionTrace = [{
+                labels: selectedInfections,
+                values: selectedInfections.map(infection => infectionTotals[infection]),
+                type: 'pie'
+            }];
+
+            const infectionLayout = {
+                title: '感染症別 累計感染者数',
+                autosize: true,
+                margin: { l: 50, r: 50, b: 50, t: 50, pad: 4 }
+            };
+
+            Plotly.newPlot('infection-chart', infectionTrace, infectionLayout);
+        }
+
+        // 感染症選択の初期化
+        function initializeInfectionSelect() {
+            const selectElement = document.getElementById('infection-select');
+            selectElement.innerHTML = '';
+
+            data.infectionNames.forEach(infection => {
+                const option = document.createElement('option');
+                option.value = infection;
+                option.textContent = infection;
+                selectElement.appendChild(option);
+            });
+
+            // 最初の感染症をデフォルトで選択
+            if (data.infectionNames.length > 0) {
+                selectElement.value = data.infectionNames[0];
+                selectedInfections = [data.infectionNames[0]];
+            }
+
+            selectElement.addEventListener('change', function() {
+                selectedInfections = Array.from(this.selectedOptions).map(option => option.value);
+                filterData();
+            });
+        }
+
+        // 日付範囲選択の初期化
+        function initializeDateRange() {
+            const startDateInput = document.getElementById('start-date');
+            const endDateInput = document.getElementById('end-date');
+
+            if (data && data.timeSeriesData && data.timeSeriesData.dates.length > 0) {
+                const firstDate = new Date(data.timeSeriesData.dates[0]);
+                const lastDate = new Date(data.timeSeriesData.dates[data.timeSeriesData.dates.length - 1]);
+
+                startDateInput.min = firstDate.toISOString().split('T')[0];
+                startDateInput.max = lastDate.toISOString().split('T')[0];
+                startDateInput.value = firstDate.toISOString().split('T')[0];
+
+                endDateInput.min = firstDate.toISOString().split('T')[0];
+                endDateInput.max = lastDate.toISOString().split('T')[0];
+                endDateInput.value = lastDate.toISOString().split('T')[0];
+
+                startDate = firstDate;
+                endDate = lastDate;
+            }
+
+            startDateInput.addEventListener('change', function() {
+                startDate = new Date(this.value);
+                filterData();
+            });
+
+            endDateInput.addEventListener('change', function() {
+                endDate = new Date(this.value);
+                filterData();
+            });
+        }
+
+        // データの読み込みと初期化
+        fetch('data.json')
+            .then(response => response.json())
+            .then(jsonData => {
+                data = jsonData;
+                initializeInfectionSelect();
+                initializeDateRange();
+                filterData();
+            })
+            .catch(error => {
+                console.error('データの読み込みに失敗しました:', error);
+                document.querySelectorAll('.card').forEach(card => {
+                    card.innerHTML = '<div class="loading">データの読み込みに失敗しました。</div>';
+                });
+            });
+    </script>
+</body>
+</html>
