@@ -2,6 +2,11 @@
 
 https://sora-watabe.github.io/tokyo-infectious-disease-viz/
 
+
+Uploading demo.mp4…
+
+
+
 このプロジェクトは、東京都の感染症データを可視化するためのStreamlitアプリケーションです。
 
 ## 機能
